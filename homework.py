@@ -3,6 +3,7 @@ import os
 import requests
 import telegram
 import time
+from urllib.error import URLError
 from dotenv import load_dotenv
 from http import HTTPStatus
 from exceptions import TokenValidationError, ResponseError
@@ -21,6 +22,18 @@ HOMEWORK_STATUSES = {
     'reviewing': 'Работа взята на проверку ревьюером.',
     'rejected': 'Работа проверена: у ревьюера есть замечания.'
 }
+MESSAGES = {
+    'env_error': 'Отсутствует обязательная переменная окружения',
+    'no_new': 'В ответе нет новых статусов',
+    'API_error': 'Ошибка при запросе к API',
+    'API_unavailable': 'Эндпоинт недоступен',
+    'not_JSON': 'Ответ возвращен не в формате JSON',
+    'wrong_value': 'Ошибка в возвращаемой API информации',
+    'status_change': 'Изменился статус проверки работы',
+    'status_unknown': 'Неизвестный статус домашней работы',
+    'message_sent': 'Сообщение успешно отправлено',
+    'message_not_sent': 'Бот не смог отправить сообщение',
+}
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -31,33 +44,37 @@ def send_message(bot, message):
     """Функция отпровляет сообщение пользователю."""
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
-        logging.info('Сообщение успешно отправлено')
+        logging.info(MESSAGES.get('message_sent'))
     except telegram.TelegramError:
-        logging.error('Бот не смог отправить сообщение')
+        logging.error(MESSAGES.get('message_not_sent'))
 
 
 def get_api_answer(current_timestamp):
     """Функция получает ответ от эндпоинта."""
-    timestamp = current_timestamp
-    params = {'from_date': timestamp}
-    homework_statuses = requests.get(ENDPOINT, headers=HEADERS, params=params)
+    params = {'from_date': current_timestamp}
+    try:
+        homework_statuses = requests.get(ENDPOINT,
+                                         headers=HEADERS,
+                                         params=params)
+    except requests.exceptions.RequestException:
+        logging.error(MESSAGES.get("API_error"))
+        raise URLError(MESSAGES.get("API_error"))
     if homework_statuses.status_code == HTTPStatus.OK:
-        return homework_statuses.json()
-    else:
-        logging.error('Эндпоинт недоступен')
-        send_message(telegram.Bot(token=TELEGRAM_TOKEN), 'Эндпоинт недоступен')
-        raise ResponseError('Эндпоинт недоступен')
+        try:
+            return homework_statuses.json()
+        except ValueError:
+            logging.error(MESSAGES.get('not_JSON'))
+            raise ValueError(MESSAGES.get('not_JSON'))
+    logging.error(MESSAGES.get('API_unavailable'))
+    raise ResponseError(MESSAGES.get('API_unavailable'))
 
 
 def check_response(response):
     """Функция проверяет ответ от эндпоинта."""
     if 'homeworks' in response and isinstance(response.get('homeworks'), list):
         return response.get('homeworks')
-    else:
-        logging.error('Ошибка в возвращаемой API информации')
-        send_message(telegram.Bot(token=TELEGRAM_TOKEN),
-                     'Ошибка в возвращаемой API информации')
-        raise TypeError('Ошибка в возвращаемой API информации')
+    logging.error(MESSAGES.get('wrong_value'))
+    raise TypeError(MESSAGES.get('wrong_value'))
 
 
 def parse_status(homework):
@@ -66,19 +83,16 @@ def parse_status(homework):
     homework_status = homework.get('status')
     if homework_status in HOMEWORK_STATUSES:
         verdict = HOMEWORK_STATUSES.get(homework_status)
-        return f'Изменился статус проверки работы "{homework_name}". {verdict}'
-    else:
-        logging.error('Неизвестный статус домашней работы')
-        send_message(telegram.Bot(token=TELEGRAM_TOKEN),
-                     'Неизвестный статус домашней работы')
-        raise KeyError('Неизвестный статус домашней работы')
+        return f'{MESSAGES.get("status_change")} "{homework_name}". {verdict}'
+    logging.error(MESSAGES.get('status_unknown'))
+    raise KeyError(MESSAGES.get('status_unknown'))
 
 
 def check_tokens():
     """Функция проверяет валидность токенов."""
-    if (PRACTICUM_TOKEN is None
-        or TELEGRAM_TOKEN is None
-            or TELEGRAM_CHAT_ID is None):
+    if any([PRACTICUM_TOKEN is None,
+            TELEGRAM_TOKEN is None,
+            TELEGRAM_CHAT_ID is None]):
         return False
     else:
         return True
@@ -88,10 +102,18 @@ def main():
     """Главная функция: отправляет и проверяет запрос API.
     В случае успеха посылает сообщение через бот.
     """
-    api_error = False
+    error_messages_sent = {
+        'API_error': False,
+        'other_API_error': False,
+        'not_JSON': False,
+        'API_unavailable': False,
+        'wrong_value': False,
+        'status_unknown': False,
+    }
+
     if not check_tokens():
-        logging.critical('Отсутствует обязательная переменная окружения')
-        raise TokenValidationError('Проверьте корректность токенов')
+        logging.critical(MESSAGES.get('env_error'))
+        raise TokenValidationError(MESSAGES.get('env_error'))
 
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     current_timestamp = int(time.time())
@@ -101,20 +123,38 @@ def main():
             response = get_api_answer(current_timestamp)
             homeworks = check_response(response)
             if not homeworks:
-                logging.debug('В ответе нет новых статусов')
+                logging.debug(MESSAGES.get('no_new'))
             for homework in homeworks:
                 status = parse_status(homework)
                 send_message(bot, status)
-
             current_timestamp = int(time.time())
-            time.sleep(RETRY_TIME)
-
+        except URLError:
+            if not error_messages_sent.get('API_error'):
+                send_message(bot, MESSAGES.get('API_error'))
+                error_messages_sent['API_error'] = True
+        except ValueError:
+            if not error_messages_sent.get('not_JSON'):
+                send_message(bot, MESSAGES.get('not_JSON'))
+                error_messages_sent['not_JSON'] = True
+        except ResponseError:
+            if not error_messages_sent.get('API_unavailable'):
+                send_message(bot, MESSAGES.get('API_unavailable'))
+                error_messages_sent['API_unavailable'] = True
+        except TypeError:
+            if not error_messages_sent.get('wrong_value'):
+                send_message(bot, MESSAGES.get('wrong_value'))
+                error_messages_sent['wrong_value'] = True
+        except KeyError:
+            if not error_messages_sent.get('status_unknown'):
+                send_message(bot, MESSAGES.get('status_unknown'))
+                error_messages_sent['status_unknown'] = True
         except Exception as error:
-            message = f'Ошибка при запросе к API: {error}'
+            message = f'{MESSAGES.get("API_error")} : {error}'
             logging.error(message)
-            if not api_error:
+            if not error_messages_sent.get('other_api_error'):
                 send_message(bot, message)
-                api_error = True
+                error_messages_sent['other_api_error'] = True
+        finally:
             time.sleep(RETRY_TIME)
 
 
