@@ -3,7 +3,6 @@ import os
 import requests
 import telegram
 import time
-from urllib.error import URLError
 from dotenv import load_dotenv
 from http import HTTPStatus
 from exceptions import TokenValidationError, ResponseError
@@ -22,18 +21,16 @@ HOMEWORK_STATUSES = {
     'reviewing': 'Работа взята на проверку ревьюером.',
     'rejected': 'Работа проверена: у ревьюера есть замечания.'
 }
-MESSAGES = {
-    'env_error': 'Отсутствует обязательная переменная окружения',
-    'no_new': 'В ответе нет новых статусов',
-    'API_error': 'Ошибка при запросе к API',
-    'API_unavailable': 'Эндпоинт недоступен',
-    'not_JSON': 'Ответ возвращен не в формате JSON',
-    'wrong_value': 'Ошибка в возвращаемой API информации',
-    'status_change': 'Изменился статус проверки работы',
-    'status_unknown': 'Неизвестный статус домашней работы',
-    'message_sent': 'Сообщение успешно отправлено',
-    'message_not_sent': 'Бот не смог отправить сообщение',
-}
+ENV_ERROR = 'Отсутствует обязательная переменная окружения'
+NO_NEW = 'В ответе нет новых статусов'
+API_ERROR = 'Ошибка при запросе к API'
+API_UNAVAILABLE = 'Эндпоинт недоступен'
+NOT_JSON = 'Ответ возвращен не в формате JSON'
+WRONG_VALUE = 'Ошибка в возвращаемой API информации'
+STATUS_CHANGE = 'Изменился статус проверки работы'
+STATUS_UNKNOWN = 'Неизвестный статус домашней работы'
+MESSAGE_SENT = 'Сообщение успешно отправлено'
+MESSAGE_NOT_SENT = 'Бот не смог отправить сообщение'
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -44,9 +41,9 @@ def send_message(bot, message):
     """Функция отпровляет сообщение пользователю."""
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
-        logging.info(MESSAGES['message_sent'])
+        logging.info(MESSAGE_SENT)
     except telegram.TelegramError:
-        logging.error(MESSAGES['message_not_sent'])
+        logging.error(MESSAGE_NOT_SENT)
 
 
 def get_api_answer(current_timestamp):
@@ -57,24 +54,24 @@ def get_api_answer(current_timestamp):
                                          headers=HEADERS,
                                          params=params)
     except requests.exceptions.RequestException:
-        logging.error(MESSAGES['API_error'])
-        raise URLError(MESSAGES['API_error'])
-    if homework_statuses.status_code == HTTPStatus.OK:
-        try:
-            return homework_statuses.json()
-        except ValueError:
-            logging.error(MESSAGES['not_JSON'])
-            raise ValueError(MESSAGES['not_JSON'])
-    logging.error(MESSAGES['API_unavailable'])
-    raise ResponseError(MESSAGES['API_unavailable'])
+        logging.error(API_ERROR)
+        raise ResponseError(API_ERROR)
+    if homework_statuses.status_code != HTTPStatus.OK:
+        logging.error(API_UNAVAILABLE)
+        raise ResponseError(API_UNAVAILABLE)
+    try:
+        return homework_statuses.json()
+    except ValueError:
+        logging.error(NOT_JSON)
+        raise ValueError(NOT_JSON)
 
 
 def check_response(response):
     """Функция проверяет ответ от эндпоинта."""
-    if 'homeworks' in response and isinstance(response.get('homeworks'), list):
+    if 'homeworks' in response and isinstance(response['homeworks'], list):
         return response.get('homeworks')
-    logging.error(MESSAGES['wrong_value'])
-    raise TypeError(MESSAGES['wrong_value'])
+    logging.error(WRONG_VALUE)
+    raise TypeError(WRONG_VALUE)
 
 
 def parse_status(homework):
@@ -83,9 +80,9 @@ def parse_status(homework):
     homework_status = homework.get('status')
     if homework_status in HOMEWORK_STATUSES:
         verdict = HOMEWORK_STATUSES.get(homework_status)
-        return f'{MESSAGES["status_change"]} "{homework_name}". {verdict}'
-    logging.error(MESSAGES['status_unknown'])
-    raise KeyError(MESSAGES['status_unknown'])
+        return f'{STATUS_CHANGE} "{homework_name}". {verdict}'
+    logging.error(STATUS_UNKNOWN)
+    raise KeyError(STATUS_UNKNOWN)
 
 
 def check_tokens():
@@ -98,8 +95,8 @@ def main():
     В случае успеха посылает сообщение через бот.
     """
     if not check_tokens():
-        logging.critical(MESSAGES['env_error'])
-        raise TokenValidationError(MESSAGES['env_error'])
+        logging.critical(ENV_ERROR)
+        raise TokenValidationError(ENV_ERROR)
 
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     current_timestamp = int(time.time())
@@ -109,7 +106,7 @@ def main():
             response = get_api_answer(current_timestamp)
             homeworks = check_response(response)
             if not homeworks:
-                logging.debug(MESSAGES['no_new'])
+                logging.debug(NO_NEW)
             for homework in homeworks:
                 status = parse_status(homework)
                 send_message(bot, status)
