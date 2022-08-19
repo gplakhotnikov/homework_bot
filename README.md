@@ -14,6 +14,10 @@
 - [Python-telegram-bot](https://python-telegram-bot.org/)
 
 ## Как запустить проект / Installation
+Клонировать репозиторий на свой компьютер
+```
+git clone git@github.com:gplakhotnikov/PROJECT_NAME.git
+```
 
 Установите зависимости, запустив команду pip3 install -r requirements.txt. После этого запустите файл homework.py для начала работы бота. 
 ```sh
